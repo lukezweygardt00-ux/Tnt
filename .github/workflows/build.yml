@@ -1,0 +1,80 @@
+name: Build Mega TNT Mod
+
+# Put this file at: .github/workflows/build.yml
+# Upload MegaTntMod.zip to the ROOT of the repo -> the build starts automatically.
+
+on:
+  push:
+    paths:
+      - "MegaTntMod.zip"
+      - ".github/workflows/build.yml"
+  workflow_dispatch:
+
+env:
+  ZIP_NAME: MegaTntMod.zip
+  GRADLE_VERSION: "5.6.4"
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # Forge 1.7.10 (ForgeGradle 1.2) only works on Java 8
+      - name: Set up JDK 8
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "8"
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/gradle-${{ env.GRADLE_VERSION }}
+          key: gradle-forge-1.7.10-${{ hashFiles('MegaTntMod.zip') }}
+          restore-keys: |
+            gradle-forge-1.7.10-
+
+      - name: Unzip the mod
+        run: |
+          test -f "$ZIP_NAME" || { echo "::error::$ZIP_NAME not found in repo root"; exit 1; }
+          mkdir -p _work
+          unzip -q "$ZIP_NAME" -d _work
+          PROJECT_DIR=$(dirname "$(find _work -name build.gradle | head -n 1)")
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Project found at: $PROJECT_DIR"
+
+      # The old official ForgeGradle 1.2 can't download anything anymore (dead URLs).
+      # anatawa12's fork is the maintained version that works with modern Gradle.
+      - name: Install Gradle
+        run: |
+          if [ ! -d "$HOME/gradle-$GRADLE_VERSION" ]; then
+            curl -fsSL "https://services.gradle.org/distributions/gradle-$GRADLE_VERSION-bin.zip" -o gradle.zip
+            unzip -q gradle.zip -d "$HOME"
+          fi
+          "$HOME/gradle-$GRADLE_VERSION/bin/gradle" --version
+
+      - name: Patch build.gradle to use maintained ForgeGradle
+        run: |
+          F="$PROJECT_DIR/build.gradle"
+          sed -i 's#http://files.minecraftforge.net/maven#https://maven.minecraftforge.net/#g' "$F"
+          sed -i "s#classpath 'net.minecraftforge.gradle:ForgeGradle:1.2-SNAPSHOT'#classpath('com.anatawa12.forge:ForgeGradle:1.2-1.1.+') { changing = true }#" "$F"
+          echo "----- patched build.gradle (top) -----"
+          sed -n '1,20p' "$F"
+
+      - name: Build
+        working-directory: ${{ env.PROJECT_DIR }}
+        env:
+          GRADLE_OPTS: -Xmx2g
+        run: $HOME/gradle-$GRADLE_VERSION/bin/gradle setupCIWorkspace build --no-daemon --stacktrace
+
+      - name: Upload mod jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: MegaTntMod-jar
+          path: ${{ env.PROJECT_DIR }}/build/libs/*.jar
+          if-no-files-found: error
