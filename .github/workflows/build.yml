@@ -1,0 +1,76 @@
+name: Build Mega TNT Mod
+
+# Put this file at: .github/workflows/build.yml
+# Upload MegaTntMod.zip to the ROOT of the repo -> the build starts automatically.
+
+on:
+  push:
+    paths:
+      - "MegaTntMod.zip"
+      - ".github/workflows/build.yml"
+  workflow_dispatch:
+
+env:
+  ZIP_NAME: MegaTntMod.zip
+  FORGE_MDK_URL: https://maven.minecraftforge.net/net/minecraftforge/forge/1.7.10-10.13.4.1614-1.7.10/forge-1.7.10-10.13.4.1614-1.7.10-mdk.zip
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # Forge 1.7.10 (ForgeGradle 1.2) only works on Java 8
+      - name: Set up JDK 8
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "8"
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-forge-1.7.10-${{ hashFiles('MegaTntMod.zip') }}
+          restore-keys: |
+            gradle-forge-1.7.10-
+
+      - name: Unzip the mod
+        run: |
+          test -f "$ZIP_NAME" || { echo "::error::$ZIP_NAME not found in repo root"; exit 1; }
+          mkdir -p _work
+          unzip -q "$ZIP_NAME" -d _work
+          PROJECT_DIR=$(dirname "$(find _work -name build.gradle | head -n 1)")
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Project found at: $PROJECT_DIR"
+
+      # The zip has no gradle wrapper, so borrow it from the official Forge MDK
+      - name: Add Gradle wrapper from Forge MDK
+        run: |
+          curl -fsSL "$FORGE_MDK_URL" -o mdk.zip
+          mkdir mdk && unzip -q mdk.zip -d mdk
+          cp -r mdk/gradle "$PROJECT_DIR/"
+          cp mdk/gradlew mdk/gradlew.bat "$PROJECT_DIR/"
+          chmod +x "$PROJECT_DIR/gradlew"
+
+      # The old Forge maven URL is dead; point to the current one
+      - name: Fix Forge maven URL
+        run: |
+          sed -i 's#http://files.minecraftforge.net/maven#https://maven.minecraftforge.net/#g' "$PROJECT_DIR/build.gradle"
+
+      - name: Build
+        working-directory: ${{ env.PROJECT_DIR }}
+        env:
+          GRADLE_OPTS: -Xmx2g
+        run: ./gradlew setupCIWorkspace build --no-daemon
+
+      - name: Upload mod jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: MegaTntMod-jar
+          path: ${{ env.PROJECT_DIR }}/build/libs/*.jar
+          if-no-files-found: error
